@@ -1,0 +1,186 @@
+name: VeriSol Security Audit
+
+on:
+  pull_request:
+    paths:
+      - '**.sol'
+  push:
+    paths:
+      - '**.sol'
+  workflow_dispatch:
+    inputs:
+      contract_path:
+        description: 'Path to contract file or directory'
+        required: true
+        default: 'data/contracts/'
+      mode:
+        description: 'Audit mode'
+        required: false
+        default: 'default'
+        type: choice
+        options:
+          - default
+          - quick
+          - offline
+          - full
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install solc via solc-select
+        run: |
+          pip install solc-select
+          solc-select install 0.8.24
+          solc-select use 0.8.24
+          solc --version
+
+      - name: Install VeriSol
+        run: pip install git+https://github.com/tejaschandr/verisol.git@main
+
+      - name: Determine audit mode
+        id: mode
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          if [ -z "$MODE" ] || [ "$MODE" = "default" ]; then
+            echo "flag=" >> $GITHUB_OUTPUT
+          else
+            echo "flag=--$MODE" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run VeriSol Audit
+        id: audit
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          MODE_FLAG="${{ steps.mode.outputs.flag }}"
+          CONTRACT_DIR="${{ github.event.inputs.contract_path }}"
+
+          # Default to current directory if not specified (push/PR triggers)
+          if [ -z "$CONTRACT_DIR" ]; then
+            CONTRACT_DIR="."
+          fi
+
+          echo "Searching for Solidity files in: $CONTRACT_DIR"
+
+          # Find files and store in array
+          mapfile -t FILES < <(find "$CONTRACT_DIR" -name '*.sol' -type f | sort)
+
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "No Solidity files found in $CONTRACT_DIR!"
+            exit 1
+          fi
+
+          echo "Found ${#FILES[@]} Solidity files:"
+          printf '  %s\n' "${FILES[@]}"
+
+          # Create temp directory for individual results
+          RESULTS_DIR=$(mktemp -d)
+          AUDIT_COUNT=0
+
+          for f in "${FILES[@]}"; do
+            echo "::group::Auditing $f"
+            BASENAME=$(basename "$f" .sol)
+            OUTPUT_FILE="${RESULTS_DIR}/${BASENAME}.json"
+
+            set +e
+            verisol audit "$f" $MODE_FLAG --json > "$OUTPUT_FILE" 2>&1
+            EXIT_CODE=$?
+            set -e
+
+            # Validate JSON output
+            if [ ! -s "$OUTPUT_FILE" ] || ! jq empty "$OUTPUT_FILE" >/dev/null 2>&1; then
+              echo "::warning::Invalid or missing JSON output for $f"
+              cat "$OUTPUT_FILE" 2>/dev/null || echo "(no output)"
+              rm -f "$OUTPUT_FILE"
+            else
+              echo "Audit completed for $f"
+              AUDIT_COUNT=$((AUDIT_COUNT + 1))
+            fi
+            echo "::endgroup::"
+          done
+
+          if [ $AUDIT_COUNT -eq 0 ]; then
+            echo "::error::No successful audits completed"
+            exit 1
+          fi
+
+          # Combine all JSON results into array
+          COMBINED_REPORT="verisol-results.json"
+          jq -s '.' "${RESULTS_DIR}"/*.json > "$COMBINED_REPORT"
+
+          # Cleanup
+          rm -rf "$RESULTS_DIR"
+
+          echo "report_path=$COMBINED_REPORT" >> $GITHUB_OUTPUT
+          echo "Successfully audited $AUDIT_COUNT contracts"
+
+      - name: Parse Audit Results
+        id: results
+        run: |
+          REPORT="verisol-results.json"
+
+          # Check if report exists and is valid
+          if [ ! -f "$REPORT" ] || ! jq empty "$REPORT" >/dev/null 2>&1; then
+            echo "::error::Report file missing or invalid"
+            echo "score=0" >> $GITHUB_OUTPUT
+            echo "status=error" >> $GITHUB_OUTPUT
+            echo "critical=0" >> $GITHUB_OUTPUT
+            echo "high=0" >> $GITHUB_OUTPUT
+            echo "medium=0" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Check for any error responses in results
+          if jq -e 'map(select(.error == true)) | length > 0' "$REPORT" >/dev/null 2>&1; then
+            echo "::warning::Some audits returned errors"
+          fi
+
+          # Aggregate metrics (filter out error responses)
+          SCORE=$(jq '[.[] | select(.error != true) | .overall_score // 0] | if length > 0 then add / length * 100 | floor else 0 end' "$REPORT")
+          STATUS=$(jq -r '[.[] | select(.error != true) | .passed] | if length == 0 then "error" elif all then "passed" else "failed" end' "$REPORT")
+          CRITICAL=$(jq '[.[] | select(.error != true) | .finding_summary.critical // 0] | add // 0' "$REPORT")
+          HIGH=$(jq '[.[] | select(.error != true) | .finding_summary.high // 0] | add // 0' "$REPORT")
+          MEDIUM=$(jq '[.[] | select(.error != true) | .finding_summary.medium // 0] | add // 0' "$REPORT")
+          LOW=$(jq '[.[] | select(.error != true) | .finding_summary.low // 0] | add // 0' "$REPORT")
+          TOTAL_CONTRACTS=$(jq '[.[] | select(.error != true)] | length' "$REPORT")
+
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+          echo "high=$HIGH" >> $GITHUB_OUTPUT
+          echo "medium=$MEDIUM" >> $GITHUB_OUTPUT
+          echo "low=$LOW" >> $GITHUB_OUTPUT
+
+          # GitHub summary
+          echo "### VeriSol Audit Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Contracts Audited | ${TOTAL_CONTRACTS} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Average Score | ${SCORE}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${STATUS} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Critical | ${CRITICAL} |" >> $GITHUB_STEP_SUMMARY
+          echo "| High | ${HIGH} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Medium | ${MEDIUM} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Low | ${LOW} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Audit Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verisol-report
+          path: verisol-results.json
+          retention-days: 30

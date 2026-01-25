@@ -1,0 +1,192 @@
+name: 'VeriSol Smart Contract Audit'
+description: 'AI-powered smart contract security verification'
+author: 'VeriSol'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  contract-path:
+    description: 'Path to Solidity contract file or directory'
+    required: true
+    default: 'contracts/'
+  openai-api-key:
+    description: 'OpenAI API key for LLM analysis (not needed for quick/offline modes)'
+    required: false
+  mode:
+    description: 'Audit mode: default, quick, offline, full'
+    required: false
+    default: 'default'
+  fail-on-high:
+    description: 'Fail the action if HIGH severity issues are found'
+    required: false
+    default: 'true'
+  fail-on-critical:
+    description: 'Fail the action if CRITICAL severity issues are found'
+    required: false
+    default: 'true'
+  solc-version:
+    description: 'Solidity compiler version to use'
+    required: false
+    default: '0.8.24'
+
+outputs:
+  score:
+    description: 'Security score (0-100)'
+    value: ${{ steps.results.outputs.score }}
+  status:
+    description: 'Audit status: passed, failed, or error'
+    value: ${{ steps.results.outputs.status }}
+  findings-count:
+    description: 'Total number of findings'
+    value: ${{ steps.results.outputs.findings_count }}
+  critical-count:
+    description: 'Number of CRITICAL severity findings'
+    value: ${{ steps.results.outputs.critical }}
+  high-count:
+    description: 'Number of HIGH severity findings'
+    value: ${{ steps.results.outputs.high }}
+  report-path:
+    description: 'Path to the JSON report file'
+    value: ${{ steps.audit.outputs.report_path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install solc via solc-select
+      shell: bash
+      run: |
+        pip install solc-select
+        solc-select install ${{ inputs.solc-version }}
+        solc-select use ${{ inputs.solc-version }}
+        echo "Installed solc version:"
+        solc --version
+
+    - name: Install VeriSol
+      shell: bash
+      run: |
+        pip install "$GITHUB_ACTION_PATH"
+
+
+    - name: Run VeriSol Audit
+      id: audit
+      shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+      run: |
+        # Determine mode flag
+        MODE_FLAG=""
+        case "${{ inputs.mode }}" in
+          quick)   MODE_FLAG="--quick" ;;
+          offline) MODE_FLAG="--offline" ;;
+          full)    MODE_FLAG="--full" ;;
+        esac
+
+        REPORT_PATH="${{ runner.temp }}/verisol-results.json"
+        echo "report_path=$REPORT_PATH" >> $GITHUB_OUTPUT
+
+        echo "Running VeriSol audit..."
+        echo "  Contract: ${{ inputs.contract-path }}"
+        echo "  Mode: ${{ inputs.mode }}"
+
+        # Run audit (don't fail on non-zero exit yet)
+        set +e
+        verisol audit "${{ inputs.contract-path }}" $MODE_FLAG --json > "$REPORT_PATH" 2>&1
+        AUDIT_EXIT_CODE=$?
+        set -e
+
+        echo "audit_exit_code=$AUDIT_EXIT_CODE" >> $GITHUB_OUTPUT
+
+        # Show output
+        echo "--- Audit Results ---"
+        cat "$REPORT_PATH"
+        echo "---------------------"
+    - name: Ensure jq is installed
+      shell: bash
+      run: |
+        if ! command -v jq >/dev/null; then
+          sudo apt-get update && sudo apt-get install -y jq
+        fi  
+        
+    - name: Parse Results
+      id: results
+      shell: bash
+      run: |
+        REPORT_PATH="${{ steps.audit.outputs.report_path }}"
+
+        # Check for error response
+        if jq -e '.error' "$REPORT_PATH" > /dev/null 2>&1; then
+          echo "score=0" >> $GITHUB_OUTPUT
+          echo "status=error" >> $GITHUB_OUTPUT
+          echo "findings_count=0" >> $GITHUB_OUTPUT
+          echo "critical=0" >> $GITHUB_OUTPUT
+          echo "high=0" >> $GITHUB_OUTPUT
+          ERROR_MSG=$(jq -r '.message // "Unknown error"' "$REPORT_PATH")
+          echo "::error::VeriSol audit failed: $ERROR_MSG"
+          exit 1
+        fi
+
+        # Extract metrics
+        SCORE=$(jq -r '.overall_score * 100 | floor' "$REPORT_PATH")
+        STATUS=$(jq -r 'if .passed then "passed" else "failed" end' "$REPORT_PATH")
+        FINDINGS_COUNT=$(jq -r '.all_findings | length' "$REPORT_PATH")
+        CRITICAL=$(jq -r '.finding_summary.critical // 0' "$REPORT_PATH")
+        HIGH=$(jq -r '.finding_summary.high // 0' "$REPORT_PATH")
+        MEDIUM=$(jq -r '.finding_summary.medium // 0' "$REPORT_PATH")
+        LOW=$(jq -r '.finding_summary.low // 0' "$REPORT_PATH")
+
+        echo "score=$SCORE" >> $GITHUB_OUTPUT
+        echo "status=$STATUS" >> $GITHUB_OUTPUT
+        echo "findings_count=$FINDINGS_COUNT" >> $GITHUB_OUTPUT
+        echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+        echo "high=$HIGH" >> $GITHUB_OUTPUT
+
+        # Write job summary
+        echo "### VeriSol Security Audit" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Score | ${SCORE}% |" >> $GITHUB_STEP_SUMMARY
+        echo "| Status | ${STATUS} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Critical | ${CRITICAL} |" >> $GITHUB_STEP_SUMMARY
+        echo "| High | ${HIGH} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Medium | ${MEDIUM} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Low | ${LOW} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        if [ "$FINDINGS_COUNT" -gt 0 ]; then
+          echo "#### Findings" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          jq -r '.all_findings[] | "- **\(.severity | ascii_upcase)**: \(.title)"' "$REPORT_PATH" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Check Thresholds
+      shell: bash
+      run: |
+        CRITICAL="${{ steps.results.outputs.critical }}"
+        HIGH="${{ steps.results.outputs.high }}"
+
+        FAILED=0
+
+        if [ "${{ inputs.fail-on-critical }}" = "true" ] && [ "$CRITICAL" -gt 0 ]; then
+          echo "::error::Found $CRITICAL CRITICAL severity issue(s)"
+          FAILED=1
+        fi
+
+        if [ "${{ inputs.fail-on-high }}" = "true" ] && [ "$HIGH" -gt 0 ]; then
+          echo "::error::Found $HIGH HIGH severity issue(s)"
+          FAILED=1
+        fi
+
+        if [ "$FAILED" -eq 1 ]; then
+          exit 1
+        fi
+
+        echo "Audit passed threshold checks"
