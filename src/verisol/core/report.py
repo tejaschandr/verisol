@@ -60,6 +60,24 @@ class Confidence(str, Enum):
         return cls.MEDIUM
 
 
+class ExploitResult(BaseModel):
+    """Result of exploit simulation for a finding."""
+
+    generated: bool = Field(default=False, description="Whether exploit code was generated")
+    executed: bool = Field(default=False, description="Whether exploit was executed")
+    successful: bool = Field(default=False, description="Whether exploit drained funds")
+    exploit_code: str | None = Field(default=None, description="Generated Foundry test code")
+    output: str | None = Field(default=None, description="Forge test output")
+    error: str | None = Field(default=None, description="Error message if failed")
+    profit_wei: int | None = Field(default=None, description="Profit in wei if successful")
+
+    @computed_field
+    @property
+    def exploitable(self) -> bool:
+        """Whether the vulnerability was proven exploitable."""
+        return self.generated and self.executed and self.successful
+
+
 class Finding(BaseModel):
     """A single finding from a verification tool."""
 
@@ -87,6 +105,9 @@ class Finding(BaseModel):
     # Additional metadata
     reference: str | None = None   # Link to vulnerability database
     recommendation: str | None = None
+
+    # Exploit simulation result
+    exploit: ExploitResult | None = Field(default=None, description="Exploit simulation result")
     
     def to_markdown(self) -> str:
         """Format finding as markdown."""
@@ -119,6 +140,19 @@ class Finding(BaseModel):
 
         if self.recommendation:
             lines.extend(["", f"**Recommendation:** {self.recommendation}"])
+
+        # Exploit simulation results
+        if self.exploit:
+            if self.exploit.exploitable:
+                lines.extend([
+                    "",
+                    "**Exploit Status:** EXPLOITABLE",
+                    f"**Profit:** {self.exploit.profit_wei or 0} wei",
+                ])
+            elif self.exploit.executed:
+                lines.extend(["", "**Exploit Status:** NOT EXPLOITABLE (exploit failed)"])
+            elif self.exploit.generated:
+                lines.extend(["", "**Exploit Status:** Generated but not executed"])
 
         return "\n".join(lines)
 

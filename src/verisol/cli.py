@@ -87,6 +87,12 @@ def audit(
         "-j",
         help="Output as JSON instead of formatted (clean output for CI)",
     ),
+    exploit: bool = typer.Option(
+        False,
+        "--exploit",
+        "-x",
+        help="Generate and run exploit tests to prove exploitability",
+    ),
 ) -> None:
     """
     Audit a smart contract for security vulnerabilities.
@@ -96,6 +102,9 @@ def audit(
       --quick:   Slither only (fastest, free)
       --offline: Slither + SMTChecker (free, no API needed)
       --full:    Slither + LLM + SMTChecker (slow but complete)
+
+    Exploit Simulation:
+      --exploit: Generate and run Foundry exploit tests to prove exploitability
     """
     # In JSON mode, all non-JSON output goes to stderr
     out = stderr_console if json_output else console
@@ -123,6 +132,10 @@ def audit(
 
     # Run verification (quiet mode for JSON)
     report = asyncio.run(_run_audit(contract, quick=quick, offline=offline, full=full, quiet=json_output))
+
+    # Run exploit simulation if requested
+    if exploit and report.all_findings:
+        _run_exploit_simulation(report, contract, quiet=json_output, console_out=out)
 
     # Output results
     if json_output:
@@ -188,6 +201,58 @@ async def _run_audit(contract: Contract, quick: bool = False, offline: bool = Fa
                 report = await pipeline.run(contract, include_smt=(full or offline), skip_llm=offline)
 
     return report
+
+
+def _run_exploit_simulation(
+    report: AuditReport,
+    contract: Contract,
+    quiet: bool = False,
+    console_out: Console | None = None,
+) -> None:
+    """Run exploit simulation for findings in the report."""
+    from verisol.exploits.runner import run_exploits_for_findings, check_foundry_available
+
+    out = console_out or console
+
+    if not quiet:
+        out.print("\n[bold]Running Exploit Simulation...[/bold]")
+
+    # Check if Foundry is available
+    if not check_foundry_available():
+        if not quiet:
+            out.print("[yellow]Warning:[/yellow] Foundry (forge) not installed")
+            out.print("[dim]Install: curl -L https://foundry.paradigm.xyz | bash && foundryup[/dim]")
+        return
+
+    # Get contract name from the contract object
+    contract_name = contract.name or "Unknown"
+
+    # Run exploits for all findings
+    results = run_exploits_for_findings(
+        findings=report.all_findings,
+        contract_code=contract.code,
+        contract_name=contract_name,
+    )
+
+    if not quiet:
+        # Print exploit results
+        exploitable_count = sum(1 for _, r in results if r.exploitable)
+        total_generated = sum(1 for _, r in results if r.generated)
+
+        out.print(f"\n[bold]Exploit Results:[/bold] {exploitable_count}/{total_generated} EXPLOITABLE")
+
+        for finding, result in results:
+            if result.exploitable:
+                profit_str = f"{result.profit_wei} wei" if result.profit_wei else "unknown"
+                out.print(f"  [red]EXPLOITABLE[/red] {finding.title} (profit: {profit_str})")
+            elif result.generated and result.executed:
+                out.print(f"  [green]NOT EXPLOITABLE[/green] {finding.title}")
+                if result.error:
+                    out.print(f"    [dim]Error: {result.error[:200]}[/dim]")
+            elif result.generated:
+                out.print(f"  [yellow]NOT EXECUTED[/yellow] {finding.title}: {result.error or 'unknown error'}")
+            else:
+                out.print(f"  [dim]NO TEMPLATE[/dim] {finding.title}")
 
 
 def _print_report(report: AuditReport) -> None:
@@ -265,27 +330,33 @@ def _print_report(report: AuditReport) -> None:
 @app.command()
 def check() -> None:
     """Check if verification tools are installed."""
+    from verisol.exploits.runner import check_foundry_available
+
     pipeline = VerificationPipeline()
     tools = pipeline.check_tools()
-    
+
+    # Add Foundry check
+    tools["foundry"] = check_foundry_available()
+
     table = Table(title="Verification Tools", show_header=True)
     table.add_column("Tool", style="bold")
     table.add_column("Status")
     table.add_column("Purpose")
-    
+
     tool_info = {
         "solc": "Solidity compilation",
         "slither": "Static analysis (90+ detectors)",
         "smtchecker": "Formal verification (built into solc)",
         "llm": "LLM-based security analysis (requires API key)",
+        "foundry": "Exploit simulation (--exploit flag)",
     }
-    
+
     for name, available in tools.items():
         status = "[green]✓ Available[/green]" if available else "[red]✗ Not found[/red]"
         table.add_row(name, status, tool_info.get(name, ""))
-    
+
     console.print(table)
-    
+
     # Installation hints
     missing = [name for name, available in tools.items() if not available]
     if missing:
@@ -296,6 +367,8 @@ def check() -> None:
             console.print("  slither: pip install slither-analyzer")
         if "llm" in missing:
             console.print("  llm: Set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable")
+        if "foundry" in missing:
+            console.print("  foundry: curl -L https://foundry.paradigm.xyz | bash && foundryup")
 
 
 @app.command()
