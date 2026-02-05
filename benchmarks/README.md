@@ -1,46 +1,57 @@
 # Benchmarks
 
-Benchmark suite for evaluating VeriSol vulnerability detection.
+Benchmark suite for evaluating VeriSol exploit generation.
 
-## Current Results (2026-01-21)
+## Current Results (v0.4.0)
 
-| Benchmark | Detection Rate | Precision |
-|-----------|----------------|-----------|
-| Educational (169 contracts) | 86.7% | 86.7% |
-| DeFiVulnLabs (24 contracts) | **100%** | **85.7%** |
+Tested on 32 contracts (8 mainnet-style + 24 DeFiVulnLabs) with GPT-4o, 3 retries.
 
-## Scripts
-
-| Script | Purpose | Usage |
-|--------|---------|-------|
-| `run_slither.py` | Slither baseline | `python run_slither.py --all` |
-| `run_gpt4.py` | GPT-4o with FP filtering | `python run_gpt4.py --all --filter` |
-| `run_gpt4_fewshot.py` | Few-shot benchmark | `python run_gpt4_fewshot.py --all` |
-| `run_defivulnlabs.py` | Real-world validation | `python run_defivulnlabs.py --all` |
-| `compare.py` | Generate comparison | `python compare.py` |
+| Metric | Value |
+|--------|-------|
+| **Exploitable** | 13/32 (40.6%) |
+| Adjusted (excl. detection gaps) | 13/26 (50.0%) |
+| Avg attempts (successes) | 1.23 |
+| Contracts exploited without templates | 10 |
 
 ## Running Benchmarks
 
 ```bash
-# Real-world validation (recommended)
-python benchmarks/run_defivulnlabs.py --all
+# Full benchmark (requires OPENAI_API_KEY)
+python benchmarks/run_llm_exploits.py --dataset all
 
-# Educational benchmark
-python benchmarks/run_gpt4.py --all --filter
+# Dry run (no LLM calls)
+python benchmarks/run_llm_exploits.py --dry-run
 
-# Requires OPENAI_API_KEY in .env
+# Limit to N contracts
+python benchmarks/run_llm_exploits.py --limit 5
+
+# Specific dataset
+python benchmarks/run_llm_exploits.py --dataset mainnet
+python benchmarks/run_llm_exploits.py --dataset defivulnlabs
+```
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `run_llm_exploits.py` | Main benchmark script |
+| `contracts.json` | 32-contract manifest with metadata |
+| `results/llm_exploit_benchmark.json` | Latest benchmark results |
+
+## Contract Manifest
+
+`contracts.json` defines the benchmark contracts:
+
+```json
+{
+  "path": "data/contracts/mainnet/EtherStore_Vulnerable.sol",
+  "name": "EtherStore",
+  "vuln_type": "reentrancy",
+  "has_template": true,
+  "dataset": "mainnet"
+}
 ```
 
 ## Output
 
-Results are saved to `results/` directory (gitignored, regeneratable):
-- `defivulnlabs.json` - Real-world benchmark results
-- `gpt4_fewshot.json` - Few-shot benchmark results
-
-## Ground Truth
-
-### DeFiVulnLabs (24 contracts)
-Real vulnerability patterns from DeFiVulnLabs repository.
-
-### Educational (15 contracts with known vulnerabilities)
-From solidity-by-example.org - see `data/README.md` for full list.
+Results saved to `results/` (gitignored, regeneratable).
