@@ -206,16 +206,25 @@ class TestCodeExtraction:
 class TestLLMGenerateExploit:
     @pytest.mark.asyncio
     async def test_returns_code_on_success(self, reentrancy_finding):
-        with patch(
-            "verisol.exploits.llm_generator._call_llm",
-            new_callable=AsyncMock,
-            return_value=FAKE_LLM_RESPONSE,
-        ):
-            result = await llm_generate_exploit(
-                finding=reentrancy_finding,
-                contract_code=SAMPLE_CONTRACT,
-                contract_name="EtherStore",
-            )
+        with patch("verisol.config.get_settings") as mock_settings:
+            s = mock_settings.return_value
+            s.exploit_llm_provider = "openai"
+            s.exploit_llm_model = None
+            s.llm_provider = "openai"
+            s.llm_timeout = 60
+            s.openai_api_key = "sk-test-key"
+            s.anthropic_api_key = None
+
+            with patch(
+                "verisol.exploits.llm_generator._call_llm",
+                new_callable=AsyncMock,
+                return_value=FAKE_LLM_RESPONSE,
+            ):
+                result = await llm_generate_exploit(
+                    finding=reentrancy_finding,
+                    contract_code=SAMPLE_CONTRACT,
+                    contract_name="EtherStore",
+                )
         assert result is not None
         assert "pragma solidity" in result
 
@@ -240,16 +249,25 @@ class TestLLMGenerateExploit:
 
     @pytest.mark.asyncio
     async def test_returns_none_on_llm_error(self, reentrancy_finding):
-        with patch(
-            "verisol.exploits.llm_generator._call_llm",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("API error 500"),
-        ):
-            result = await llm_generate_exploit(
-                finding=reentrancy_finding,
-                contract_code=SAMPLE_CONTRACT,
-                contract_name="EtherStore",
-            )
+        with patch("verisol.config.get_settings") as mock_settings:
+            s = mock_settings.return_value
+            s.exploit_llm_provider = "openai"
+            s.exploit_llm_model = None
+            s.llm_provider = "openai"
+            s.llm_timeout = 60
+            s.openai_api_key = "sk-test-key"
+            s.anthropic_api_key = None
+
+            with patch(
+                "verisol.exploits.llm_generator._call_llm",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("API error 500"),
+            ):
+                result = await llm_generate_exploit(
+                    finding=reentrancy_finding,
+                    contract_code=SAMPLE_CONTRACT,
+                    contract_name="EtherStore",
+                )
         assert result is None
 
 
@@ -260,16 +278,26 @@ class TestLLMGenerateExploit:
 class TestGenerateExploitFallback:
     @pytest.mark.asyncio
     async def test_uses_llm_when_enabled(self, reentrancy_finding):
-        with patch(
-            "verisol.exploits.llm_generator._call_llm",
-            new_callable=AsyncMock,
-            return_value=FAKE_LLM_RESPONSE,
-        ):
-            result = await generate_exploit(
-                finding=reentrancy_finding,
-                contract_code=SAMPLE_CONTRACT,
-                contract_name="EtherStore",
-            )
+        with patch("verisol.config.get_settings") as mock_settings:
+            s = mock_settings.return_value
+            s.exploit_llm_enabled = True
+            s.exploit_llm_provider = "openai"
+            s.exploit_llm_model = None
+            s.llm_provider = "openai"
+            s.llm_timeout = 60
+            s.openai_api_key = "sk-test-key"
+            s.anthropic_api_key = None
+
+            with patch(
+                "verisol.exploits.llm_generator._call_llm",
+                new_callable=AsyncMock,
+                return_value=FAKE_LLM_RESPONSE,
+            ):
+                result = await generate_exploit(
+                    finding=reentrancy_finding,
+                    contract_code=SAMPLE_CONTRACT,
+                    contract_name="EtherStore",
+                )
         assert result is not None
         # Should be the LLM output, not the template
         assert "FakeExploit" in result
@@ -290,16 +318,26 @@ class TestGenerateExploitFallback:
 
     @pytest.mark.asyncio
     async def test_falls_back_to_template_on_llm_failure(self, reentrancy_finding):
-        with patch(
-            "verisol.exploits.llm_generator._call_llm",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("API down"),
-        ):
-            result = await generate_exploit(
-                finding=reentrancy_finding,
-                contract_code=SAMPLE_CONTRACT,
-                contract_name="EtherStore",
-            )
+        with patch("verisol.config.get_settings") as mock_settings:
+            s = mock_settings.return_value
+            s.exploit_llm_enabled = True
+            s.exploit_llm_provider = "openai"
+            s.exploit_llm_model = None
+            s.llm_provider = "openai"
+            s.llm_timeout = 60
+            s.openai_api_key = "sk-test-key"
+            s.anthropic_api_key = None
+
+            with patch(
+                "verisol.exploits.llm_generator._call_llm",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("API down"),
+            ):
+                result = await generate_exploit(
+                    finding=reentrancy_finding,
+                    contract_code=SAMPLE_CONTRACT,
+                    contract_name="EtherStore",
+                )
         assert result is not None
         assert "ReentrancyExploit" in result
 
@@ -317,15 +355,25 @@ class TestGenerateExploitFallback:
 
     @pytest.mark.asyncio
     async def test_llm_handles_unknown_detector(self, unknown_finding):
-        with patch(
-            "verisol.exploits.llm_generator._call_llm",
-            new_callable=AsyncMock,
-            return_value=FAKE_LLM_RESPONSE,
-        ):
-            result = await generate_exploit(
-                finding=unknown_finding,
-                contract_code=SAMPLE_CONTRACT,
-                contract_name="EtherStore",
-            )
+        with patch("verisol.config.get_settings") as mock_settings:
+            s = mock_settings.return_value
+            s.exploit_llm_enabled = True
+            s.exploit_llm_provider = "openai"
+            s.exploit_llm_model = None
+            s.llm_provider = "openai"
+            s.llm_timeout = 60
+            s.openai_api_key = "sk-test-key"
+            s.anthropic_api_key = None
+
+            with patch(
+                "verisol.exploits.llm_generator._call_llm",
+                new_callable=AsyncMock,
+                return_value=FAKE_LLM_RESPONSE,
+            ):
+                result = await generate_exploit(
+                    finding=unknown_finding,
+                    contract_code=SAMPLE_CONTRACT,
+                    contract_name="EtherStore",
+                )
         # LLM can handle detectors that have no template
         assert result is not None

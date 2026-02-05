@@ -238,7 +238,7 @@ verisol/
 ├── .github/workflows/     # CI workflows
 ├── action.yml             # GitHub Action
 ├── docs/                  # Documentation
-└── tests/                 # Test suite (77 tests)
+└── tests/                 # Test suite (93 tests)
 ```
 
 ## License
