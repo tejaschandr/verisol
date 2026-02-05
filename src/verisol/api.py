@@ -6,8 +6,15 @@ from contextlib import asynccontextmanager
 from datetime import datetime, UTC
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
+try:
+    from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+    from fastapi.middleware.cors import CORSMiddleware
+except ImportError:
+    raise ImportError(
+        "FastAPI is required for the API server. "
+        "Install with: pip install verisol[api]"
+    )
+
 from pydantic import BaseModel, Field
 
 from verisol import __version__

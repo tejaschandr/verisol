@@ -56,7 +56,7 @@ Copy `.github/workflows/verisol.yml` from this repository for a ready-to-use wor
 | `mode` | Audit mode (see below) | No | `default` |
 | `fail-on-critical` | Fail if CRITICAL issues found | No | `true` |
 | `fail-on-high` | Fail if HIGH issues found | No | `true` |
-| `solc-version` | Solidity compiler version | No | `0.8.20` |
+| `solc-version` | Solidity compiler version | No | `0.8.24` |
 
 ## Audit Modes
 
@@ -238,7 +238,7 @@ For organization-wide usage, set the secret at the organization level.
 
 ## Solidity Version
 
-VeriSol uses `solc-select` to manage Solidity compiler versions. By default, it uses `0.8.20`. To use a different version:
+VeriSol uses `solc-select` to manage Solidity compiler versions. By default, it uses `0.8.24`. To use a different version:
 
 ```yaml
 - uses: tejaschandr/verisol@v1
@@ -259,8 +259,8 @@ The action installs solc automatically via solc-select. If you see this error, e
 - name: Install solc
   run: |
     pip install solc-select
-    solc-select install 0.8.20
-    solc-select use 0.8.20
+    solc-select install 0.8.24
+    solc-select use 0.8.24
 ```
 
 ### "OPENAI_API_KEY not set"

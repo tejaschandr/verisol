@@ -21,10 +21,14 @@ class ContractSource(BaseModel):
 
 class Contract(BaseModel):
     """Represents a Solidity smart contract for verification."""
-    
+
     code: str = Field(..., min_length=1, description="Solidity source code")
     name: str | None = Field(default=None, description="Contract name (extracted or provided)")
     source: ContractSource = Field(default_factory=ContractSource)
+    source_files: dict[str, str] | None = Field(
+        default=None,
+        description="Individual source files for multi-file contracts (filepath -> content)",
+    )
     
     @computed_field
     @property
@@ -125,6 +129,39 @@ class Contract(BaseModel):
         )
     
     @classmethod
+    async def from_address(
+        cls,
+        address: str,
+        chain: str = "ethereum",
+        api_key: str | None = None,
+    ) -> Contract:
+        """Load contract source from Etherscan (or compatible explorer).
+
+        Args:
+            address: Contract address (0x + 40 hex chars).
+            chain: Chain name (ethereum, polygon, etc.).
+            api_key: Etherscan API key.
+
+        Returns:
+            Contract with source from block explorer.
+        """
+        from verisol.integrations.etherscan import fetch_contract_source
+
+        result = await fetch_contract_source(address, chain=chain, api_key=api_key)
+        name = result.contract_name or cls._extract_contract_name(result.source_code)
+
+        return cls(
+            code=result.source_code,
+            name=name,
+            source=ContractSource(
+                origin="etherscan",
+                address=address,
+                chain=chain,
+            ),
+            source_files=result.source_files or None,
+        )
+
+    @classmethod
     def from_text(cls, code: str, name: str | None = None) -> Contract:
         """Create contract from source code text."""
         extracted_name = cls._extract_contract_name(code)
@@ -144,6 +181,88 @@ class Contract(BaseModel):
             return matches[-1]
         return None
     
+    def write_source_project(self, base_dir: Path) -> tuple[Path, list[str]]:
+        """Write source files to a project directory.
+
+        For single-file contracts, writes a single ``.sol`` file.
+        For multi-file contracts (from Etherscan), writes each file to its
+        original path and creates ``remappings.txt`` for ``@``-prefixed
+        imports.
+
+        Args:
+            base_dir: Directory to write files into.
+
+        Returns:
+            Tuple of (main_file_path, remapping_entries).
+        """
+        base_dir.mkdir(parents=True, exist_ok=True)
+
+        if not self.source_files or len(self.source_files) <= 1:
+            path = self.to_temp_file(base_dir)
+            return path, []
+
+        # Write each source file preserving directory structure
+        for filepath, content in self.source_files.items():
+            dest = base_dir / filepath
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content)
+
+        # Detect remappings by scanning import statements against file paths
+        remap_set: set[str] = set()
+
+        import_pattern = re.compile(r'import\s+(?:.*\s+from\s+)?["\']([^"\']+)["\']')
+        import_paths: set[str] = set()
+        for content in self.source_files.values():
+            for m in import_pattern.finditer(content):
+                import_paths.add(m.group(1))
+
+        file_path_set = set(self.source_files.keys())
+
+        for imp in import_paths:
+            if imp.startswith(".") or imp in file_path_set:
+                continue
+            # Find a file that shares the longest common suffix with the import
+            imp_parts = imp.split("/")
+            for fpath in file_path_set:
+                fpath_parts = fpath.split("/")
+                # Count common trailing path segments
+                common = 0
+                for i in range(1, min(len(imp_parts), len(fpath_parts)) + 1):
+                    if imp_parts[-i] == fpath_parts[-i]:
+                        common = i
+                    else:
+                        break
+                if common > 0 and common < len(imp_parts):
+                    imp_prefix = "/".join(imp_parts[:-common]) + "/"
+                    fpath_prefix = "/".join(fpath_parts[:-common]) + "/"
+                    remap_set.add(f"{imp_prefix}={fpath_prefix}")
+                    break
+
+        # Also handle @-prefixed dirs at root level
+        for filepath in self.source_files:
+            parts = filepath.split("/")
+            if parts[0].startswith("@"):
+                remap_set.add(f"{parts[0]}/={parts[0]}/")
+
+        remappings = sorted(remap_set)
+
+        if remappings:
+            (base_dir / "remappings.txt").write_text("\n".join(remappings) + "\n")
+
+        # Find the file that defines the main contract
+        main_file: Path | None = None
+        if self.name:
+            pattern = re.compile(rf"\bcontract\s+{re.escape(self.name)}\b")
+            for filepath, content in self.source_files.items():
+                if pattern.search(content):
+                    main_file = base_dir / filepath
+                    break
+
+        if main_file is None:
+            main_file = base_dir / list(self.source_files.keys())[0]
+
+        return main_file, remappings
+
     def to_temp_file(self, dir: Path | None = None) -> Path:
         """Write contract to a temporary file for verification tools."""
         import tempfile

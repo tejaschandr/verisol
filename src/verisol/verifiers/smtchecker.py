@@ -43,13 +43,21 @@ class SMTCheckerVerifier(BaseVerifier):
         Returns:
             VerificationResult with formal verification findings
         """
+        from verisol.verifiers.solc import _resolve_solc_version, _ensure_solc_version
+
         findings = []
         properties_checked = 0
         properties_proven = 0
-        
+
+        # Auto-select solc version based on pragma
+        target_version = _resolve_solc_version(contract.solidity_version)
+        if target_version:
+            _ensure_solc_version(target_version)
+
         with tempfile.TemporaryDirectory() as tmpdir:
-            contract_path = contract.to_temp_file(Path(tmpdir))
-            
+            tmpdir_path = Path(tmpdir)
+            contract_path, remappings = contract.write_source_project(tmpdir_path)
+
             # Run solc with SMTChecker
             # Using CHC engine (Constrained Horn Clauses) - more powerful than BMC
             cmd = [
@@ -57,11 +65,18 @@ class SMTCheckerVerifier(BaseVerifier):
                 "--model-checker-engine=chc",
                 "--model-checker-targets=all",  # Check all property types
                 "--model-checker-timeout", str(self.timeout * 1000),  # ms
-                str(contract_path),
             ]
-            
+            for remap in remappings:
+                cmd.append(remap)
+            if remappings:
+                cmd.extend(["--base-path", str(tmpdir_path)])
+                cmd.extend(["--allow-paths", str(tmpdir_path)])
+            cmd.append(str(contract_path))
+
             try:
-                returncode, stdout, stderr = await self._run_command(cmd)
+                returncode, stdout, stderr = await self._run_command(
+                    cmd, cwd=tmpdir_path,
+                )
             except Exception as e:
                 return VerificationResult(
                     verifier=self.name,

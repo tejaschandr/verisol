@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -10,6 +12,59 @@ from verisol.config import settings
 from verisol.core.contract import Contract
 from verisol.core.report import Finding, Severity, VerificationResult, VerifierStatus
 from verisol.verifiers.base import BaseVerifier
+
+
+def _resolve_solc_version(pragma: str | None) -> str | None:
+    """Resolve a pragma version spec to an exact installable version.
+
+    Handles ``0.8.15``, ``^0.8.15``, ``>=0.8.0 <0.9.0``, etc.
+    Returns the exact version string (e.g. ``"0.8.15"``) or ``None``.
+    """
+    if not pragma:
+        return None
+    # Exact version: "0.8.15"
+    exact = re.match(r"^(\d+\.\d+\.\d+)$", pragma.strip())
+    if exact:
+        return exact.group(1)
+    # Caret: "^0.8.15" — use that exact version
+    caret = re.match(r"^\^(\d+\.\d+\.\d+)$", pragma.strip())
+    if caret:
+        return caret.group(1)
+    # Range: ">=0.8.0 <0.9.0" — use the lower bound
+    rng = re.match(r"^>=?\s*(\d+\.\d+\.\d+)", pragma.strip())
+    if rng:
+        return rng.group(1)
+    return None
+
+
+def _ensure_solc_version(version: str) -> bool:
+    """Install and activate a solc version via solc-select. Returns True on success."""
+    try:
+        # Check if already installed
+        result = subprocess.run(
+            ["solc-select", "versions"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if version in result.stdout:
+            subprocess.run(
+                ["solc-select", "use", version],
+                capture_output=True, text=True, timeout=10,
+            )
+            return True
+        # Install then use
+        install = subprocess.run(
+            ["solc-select", "install", version],
+            capture_output=True, text=True, timeout=120,
+        )
+        if install.returncode != 0:
+            return False
+        subprocess.run(
+            ["solc-select", "use", version],
+            capture_output=True, text=True, timeout=10,
+        )
+        return True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
 
 
 class SolcVerifier(BaseVerifier):
@@ -37,32 +92,57 @@ class SolcVerifier(BaseVerifier):
             VerificationResult with compilation status
         """
         findings = []
-        
-        # Write contract to temp file
+
+        # Auto-select solc version based on pragma
+        target_version = _resolve_solc_version(contract.solidity_version)
+        if target_version:
+            _ensure_solc_version(target_version)
+
+        # Write contract source(s) to temp directory
         with tempfile.TemporaryDirectory() as tmpdir:
-            contract_path = contract.to_temp_file(Path(tmpdir))
-            
+            tmpdir_path = Path(tmpdir)
+            contract_path, remappings = contract.write_source_project(tmpdir_path)
+
             # Run solc
             cmd = [
                 "solc",
                 "--optimize",
                 "--bin",
                 "--abi",
-                str(contract_path),
             ]
-            
+            # Add remappings for multi-file contracts
+            for remap in remappings:
+                cmd.append(remap)
+            if remappings:
+                cmd.extend(["--base-path", str(tmpdir_path)])
+                cmd.extend(["--allow-paths", str(tmpdir_path)])
+            cmd.append(str(contract_path))
+
             try:
-                returncode, stdout, stderr = await self._run_command(cmd)
+                returncode, stdout, stderr = await self._run_command(
+                    cmd, cwd=tmpdir_path,
+                )
             except Exception as e:
                 return VerificationResult(
                     verifier=self.name,
                     status=VerifierStatus.ERROR,
                     error_message=str(e),
                 )
-            
-            # Parse output for warnings/errors
+
+            # Retry with --via-ir if "Stack too deep"
             output = stdout + stderr
-            
+            if returncode != 0 and "Stack too deep" in output:
+                ir_cmd = cmd[:-1] + ["--via-ir"] + cmd[-1:]
+                try:
+                    returncode, stdout, stderr = await self._run_command(
+                        ir_cmd, cwd=tmpdir_path,
+                    )
+                    output = stdout + stderr
+                except Exception:
+                    pass  # Fall through to normal error handling
+
+            # Parse output for warnings/errors
+
             # Check for compilation errors
             if returncode != 0 or "Error:" in output:
                 findings.append(Finding(

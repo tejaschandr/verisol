@@ -1,0 +1,226 @@
+[
+  {
+    "path": "data/contracts/mainnet/EtherStore_Vulnerable.sol",
+    "name": "EtherStore",
+    "vuln_type": "reentrancy",
+    "has_template": true,
+    "dataset": "mainnet"
+  },
+  {
+    "path": "data/contracts/mainnet/MissingAccessControl_Vulnerable.sol",
+    "name": "MissingAccessControl",
+    "vuln_type": "access-control",
+    "has_template": true,
+    "dataset": "mainnet"
+  },
+  {
+    "path": "data/contracts/mainnet/TimeLock_Overflow_Vulnerable.sol",
+    "name": "TimeLock",
+    "vuln_type": "overflow",
+    "has_template": true,
+    "dataset": "mainnet"
+  },
+  {
+    "path": "data/contracts/mainnet/Wallet_TxOrigin_Vulnerable.sol",
+    "name": "Wallet",
+    "vuln_type": "tx-origin",
+    "has_template": false,
+    "dataset": "mainnet"
+  },
+  {
+    "path": "data/contracts/mainnet/Proxy_Delegatecall_Vulnerable.sol",
+    "name": "Proxy",
+    "vuln_type": "delegatecall",
+    "has_template": false,
+    "dataset": "mainnet"
+  },
+  {
+    "path": "data/contracts/mainnet/UncheckedReturn_Vulnerable.sol",
+    "name": "UncheckedReturn",
+    "vuln_type": "unchecked-return",
+    "has_template": false,
+    "dataset": "mainnet"
+  },
+  {
+    "path": "data/contracts/mainnet/FlashLoan_Vulnerable.sol",
+    "name": "VulnerableLending",
+    "vuln_type": "flash-loan",
+    "has_template": false,
+    "dataset": "mainnet"
+  },
+  {
+    "path": "data/contracts/mainnet/EtherGame_Selfdestruct_Vulnerable.sol",
+    "name": "EtherGame",
+    "vuln_type": "selfdestruct",
+    "has_template": false,
+    "dataset": "mainnet"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/Reentrancy.sol",
+    "name": "EtherStore",
+    "vuln_type": "reentrancy",
+    "has_template": true,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/Delegatecall.sol",
+    "name": "Proxy",
+    "vuln_type": "delegatecall",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/TxOrigin.sol",
+    "name": "Wallet",
+    "vuln_type": "tx-origin",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/DOS.sol",
+    "name": "KingOfEther",
+    "vuln_type": "dos",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/Overflow.sol",
+    "name": "TimeLock",
+    "vuln_type": "overflow",
+    "has_template": true,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/Selfdestruct.sol",
+    "name": "EtherGame",
+    "vuln_type": "selfdestruct",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/Visibility.sol",
+    "name": "OwnerGame",
+    "vuln_type": "visibility",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/Randomness.sol",
+    "name": "GuessTheRandomNumber",
+    "vuln_type": "randomness",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/SignatureReplay.sol",
+    "name": "TokenWhale",
+    "vuln_type": "signature-replay",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/PrivateData.sol",
+    "name": "Vault",
+    "vuln_type": "private-data",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/BypassContract.sol",
+    "name": "Target",
+    "vuln_type": "bypass-contract",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/Backdoor.sol",
+    "name": "LotteryGame",
+    "vuln_type": "backdoor",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/PriceManipulation.sol",
+    "name": "SimplePool",
+    "vuln_type": "price-manipulation",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/UnsafeCall.sol",
+    "name": "TokenWhale",
+    "vuln_type": "unsafe-call",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/PrecisionLoss.sol",
+    "name": "SimplePool",
+    "vuln_type": "precision-loss",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/FirstDeposit.sol",
+    "name": "SimplePool",
+    "vuln_type": "first-deposit",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/OracleStale.sol",
+    "name": "VulnerableOracle",
+    "vuln_type": "oracle-stale",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/ReadOnlyReentrancy.sol",
+    "name": "VulnContract",
+    "vuln_type": "read-only-reentrancy",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/UnprotectedCallback.sol",
+    "name": "MaxMint721",
+    "vuln_type": "callback",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/DataLocation.sol",
+    "name": "Array",
+    "vuln_type": "data-location",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/StorageCollision.sol",
+    "name": "Proxy",
+    "vuln_type": "storage-collision",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/DivideBeforeMultiply.sol",
+    "name": "Miscalculation",
+    "vuln_type": "divide-before-multiply",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/Ecrecover.sol",
+    "name": "SimpleBank",
+    "vuln_type": "ecrecover",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  },
+  {
+    "path": "data/contracts/defivulnlabs/UninitializedProxy.sol",
+    "name": "Engine",
+    "vuln_type": "uninitialized-proxy",
+    "has_template": false,
+    "dataset": "defivulnlabs"
+  }
+]

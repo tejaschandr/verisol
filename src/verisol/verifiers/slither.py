@@ -71,12 +71,20 @@ class SlitherVerifier(BaseVerifier):
         Returns:
             VerificationResult with static analysis findings
         """
+        from verisol.verifiers.solc import _resolve_solc_version, _ensure_solc_version
+
         findings = []
-        
+
+        # Auto-select solc version based on pragma
+        target_version = _resolve_solc_version(contract.solidity_version)
+        if target_version:
+            _ensure_solc_version(target_version)
+
         with tempfile.TemporaryDirectory() as tmpdir:
-            contract_path = contract.to_temp_file(Path(tmpdir))
-            json_output = Path(tmpdir) / "slither-output.json"
-            
+            tmpdir_path = Path(tmpdir)
+            contract_path, remappings = contract.write_source_project(tmpdir_path)
+            json_output = tmpdir_path / "slither-output.json"
+
             # Run slither with JSON output
             cmd = [
                 "slither",
@@ -85,16 +93,29 @@ class SlitherVerifier(BaseVerifier):
                 "--exclude-informational",  # Skip low-signal findings for now
                 "--exclude-optimization",
             ]
-            
+            # Pass remappings for multi-file contracts
+            if remappings:
+                cmd.extend(["--solc-remaps", " ".join(remappings)])
+
             try:
-                returncode, stdout, stderr = await self._run_command(cmd, cwd=Path(tmpdir))
+                returncode, stdout, stderr = await self._run_command(cmd, cwd=tmpdir_path)
             except Exception as e:
                 return VerificationResult(
                     verifier=self.name,
                     status=VerifierStatus.ERROR,
                     error_message=f"Slither execution failed: {e}",
                 )
-            
+
+            # Retry with --via-ir if Slither's internal solc hit Stack too deep
+            if "Stack too deep" in (stdout + stderr):
+                ir_cmd = cmd + ["--solc-args", "--via-ir --optimize"]
+                try:
+                    returncode, stdout, stderr = await self._run_command(
+                        ir_cmd, cwd=tmpdir_path,
+                    )
+                except Exception:
+                    pass  # Fall through to normal error handling
+
             # Parse JSON output
             if json_output.exists():
                 try:

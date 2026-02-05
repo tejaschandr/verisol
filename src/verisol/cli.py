@@ -52,11 +52,32 @@ def main(
 
 @app.command()
 def audit(
-    contract_path: Path = typer.Argument(
-        ...,
+    contract_path: Optional[Path] = typer.Argument(
+        None,
         help="Path to Solidity contract file",
-        exists=True,
-        readable=True,
+    ),
+    address: Optional[str] = typer.Option(
+        None,
+        "--address",
+        "-a",
+        help="Contract address to fetch from Etherscan (e.g. 0x1234...)",
+    ),
+    chain: str = typer.Option(
+        "ethereum",
+        "--chain",
+        "-c",
+        help="Chain for address lookup (ethereum, polygon, arbitrum, optimism, base)",
+    ),
+    fork_url: Optional[str] = typer.Option(
+        None,
+        "--fork-url",
+        help="RPC URL for fork mode (exploit tests run against on-chain state)",
+    ),
+    block: Optional[int] = typer.Option(
+        None,
+        "--block",
+        "-b",
+        help="Pin fork to a specific block number",
     ),
     quick: bool = typer.Option(
         False,
@@ -97,45 +118,121 @@ def audit(
     """
     Audit a smart contract for security vulnerabilities.
 
+    Sources (exactly one required):
+      CONTRACT_PATH: Local Solidity file
+      --address/-a:  Fetch verified source from Etherscan
+
     Modes:
       Default:   Slither + LLM (fast, thorough)
       --quick:   Slither only (fastest, free)
       --offline: Slither + SMTChecker (free, no API needed)
       --full:    Slither + LLM + SMTChecker (slow but complete)
 
+    Fork Mode:
+      --address + --exploit: Run exploits against real on-chain state
+      --fork-url:            Override RPC URL (default from .env)
+      --block/-b:            Pin to a specific block number
+
     Exploit Simulation:
       --exploit: Generate and run Foundry exploit tests to prove exploitability
     """
+    from verisol.config import get_settings
+
     # In JSON mode, all non-JSON output goes to stderr
     out = stderr_console if json_output else console
 
-    try:
-        contract = Contract.from_file(contract_path)
-    except Exception as e:
-        if json_output:
-            # Output error as JSON
-            error_json = {
-                "error": True,
-                "message": f"Error loading contract: {e}",
-                "contract_path": str(contract_path),
-            }
-            print(json.dumps(error_json, indent=2))
-        else:
-            console.print(f"[red]Error loading contract:[/red] {e}")
+    # Validate: exactly one of contract_path or address
+    if contract_path and address:
+        out.print("[red]Error:[/red] Provide either a contract path or --address, not both")
         raise typer.Exit(1)
+    if not contract_path and not address:
+        out.print("[red]Error:[/red] Provide a contract path or --address")
+        raise typer.Exit(1)
+
+    settings = get_settings()
+    resolved_fork_url: str | None = None
+
+    if address:
+        # --- Address path: fetch from Etherscan ---
+        if not json_output:
+            out.print(f"\n[bold]Fetching contract:[/bold] {address} on {chain}")
+
+        try:
+            contract = asyncio.run(
+                Contract.from_address(
+                    address,
+                    chain=chain,
+                    api_key=settings.etherscan_api_key,
+                )
+            )
+        except Exception as e:
+            if json_output:
+                error_json = {
+                    "error": True,
+                    "message": f"Error fetching contract: {e}",
+                    "address": address,
+                    "chain": chain,
+                }
+                print(json.dumps(error_json, indent=2))
+            else:
+                out.print(f"[red]Error fetching contract:[/red] {e}")
+            raise typer.Exit(1)
+
+        # Resolve fork URL for exploit mode
+        if exploit:
+            resolved_fork_url = fork_url or settings.get_rpc_url(chain)
+            if not resolved_fork_url and not json_output:
+                out.print(
+                    "[yellow]Warning:[/yellow] No RPC URL for fork mode. "
+                    "Exploits will run without on-chain state. "
+                    f"Set {chain.upper()}_RPC_URL or use --fork-url."
+                )
+    else:
+        # --- File path ---
+        assert contract_path is not None
+        if not contract_path.exists():
+            out.print(f"[red]Error:[/red] Contract file not found: {contract_path}")
+            raise typer.Exit(1)
+
+        try:
+            contract = Contract.from_file(contract_path)
+        except Exception as e:
+            if json_output:
+                error_json = {
+                    "error": True,
+                    "message": f"Error loading contract: {e}",
+                    "contract_path": str(contract_path),
+                }
+                print(json.dumps(error_json, indent=2))
+            else:
+                out.print(f"[red]Error loading contract:[/red] {e}")
+            raise typer.Exit(1)
+
+        # Allow --fork-url even for local files
+        resolved_fork_url = fork_url
 
     # Print header (to stderr in JSON mode)
     if not json_output:
-        out.print(f"\n[bold]Auditing:[/bold] {contract.name or contract_path.name}")
+        display_name = contract.name or (contract_path.name if contract_path else address)
+        out.print(f"\n[bold]Auditing:[/bold] {display_name}")
+        if address:
+            out.print(f"[dim]Address: {address} ({chain})[/dim]")
         out.print(f"[dim]Lines of code: {contract.lines_of_code}[/dim]")
-        out.print(f"[dim]Solidity version: {contract.solidity_version or 'unknown'}[/dim]\n")
+        out.print(f"[dim]Solidity version: {contract.solidity_version or 'unknown'}[/dim]")
+        if resolved_fork_url:
+            out.print(f"[dim]Fork mode: {resolved_fork_url}[/dim]")
+        out.print()
 
     # Run verification (quiet mode for JSON)
     report = asyncio.run(_run_audit(contract, quick=quick, offline=offline, full=full, quiet=json_output))
 
     # Run exploit simulation if requested
     if exploit and report.all_findings:
-        _run_exploit_simulation(report, contract, quiet=json_output, console_out=out)
+        asyncio.run(_run_exploit_simulation(
+            report, contract,
+            quiet=json_output, console_out=out,
+            fork_url=resolved_fork_url, fork_block=block,
+        ))
 
     # Output results
     if json_output:
@@ -203,11 +300,13 @@ async def _run_audit(contract: Contract, quick: bool = False, offline: bool = Fa
     return report
 
 
-def _run_exploit_simulation(
+async def _run_exploit_simulation(
     report: AuditReport,
     contract: Contract,
     quiet: bool = False,
     console_out: Console | None = None,
+    fork_url: str | None = None,
+    fork_block: int | None = None,
 ) -> None:
     """Run exploit simulation for findings in the report."""
     from verisol.exploits.runner import run_exploits_for_findings, check_foundry_available
@@ -215,7 +314,8 @@ def _run_exploit_simulation(
     out = console_out or console
 
     if not quiet:
-        out.print("\n[bold]Running Exploit Simulation...[/bold]")
+        mode_label = " (fork mode)" if fork_url else ""
+        out.print(f"\n[bold]Running Exploit Simulation{mode_label}...[/bold]")
 
     # Check if Foundry is available
     if not check_foundry_available():
@@ -227,11 +327,21 @@ def _run_exploit_simulation(
     # Get contract name from the contract object
     contract_name = contract.name or "Unknown"
 
-    # Run exploits for all findings
-    results = run_exploits_for_findings(
-        findings=report.all_findings,
+    # Filter to HIGH+ severity findings for exploit generation
+    from verisol.core.report import Severity
+    exploit_findings = [
+        f for f in report.all_findings
+        if f.severity in (Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM)
+    ]
+
+    # Run exploits for high-signal findings (async — may call LLM)
+    results = await run_exploits_for_findings(
+        findings=exploit_findings,
         contract_code=contract.code,
         contract_name=contract_name,
+        fork_url=fork_url,
+        fork_block=fork_block,
+        source_files=contract.source_files,
     )
 
     if not quiet:
@@ -244,15 +354,17 @@ def _run_exploit_simulation(
         for finding, result in results:
             if result.exploitable:
                 profit_str = f"{result.profit_wei} wei" if result.profit_wei else "unknown"
-                out.print(f"  [red]EXPLOITABLE[/red] {finding.title} (profit: {profit_str})")
+                attempt_str = f", {result.attempts} attempt{'s' if result.attempts != 1 else ''}" if result.attempts > 1 else ""
+                method_str = f" via {result.generation_method}" if result.generation_method != "template" else ""
+                out.print(f"  [red]EXPLOITABLE[/red] {finding.title} (profit: {profit_str}{attempt_str}{method_str})")
             elif result.generated and result.executed:
-                out.print(f"  [green]NOT EXPLOITABLE[/green] {finding.title}")
+                out.print(f"  [green]NOT EXPLOITABLE[/green] {finding.title} ({result.attempts} attempts)")
                 if result.error:
                     out.print(f"    [dim]Error: {result.error[:200]}[/dim]")
             elif result.generated:
                 out.print(f"  [yellow]NOT EXECUTED[/yellow] {finding.title}: {result.error or 'unknown error'}")
             else:
-                out.print(f"  [dim]NO TEMPLATE[/dim] {finding.title}")
+                out.print(f"  [dim]NO EXPLOIT[/dim] {finding.title}")
 
 
 def _print_report(report: AuditReport) -> None:
@@ -330,13 +442,18 @@ def _print_report(report: AuditReport) -> None:
 @app.command()
 def check() -> None:
     """Check if verification tools are installed."""
+    from verisol.config import get_settings
     from verisol.exploits.runner import check_foundry_available
 
+    settings = get_settings()
     pipeline = VerificationPipeline()
     tools = pipeline.check_tools()
 
     # Add Foundry check
     tools["foundry"] = check_foundry_available()
+
+    # Add Etherscan check
+    tools["etherscan"] = bool(settings.etherscan_api_key)
 
     table = Table(title="Verification Tools", show_header=True)
     table.add_column("Tool", style="bold")
@@ -349,6 +466,7 @@ def check() -> None:
         "smtchecker": "Formal verification (built into solc)",
         "llm": "LLM-based security analysis (requires API key)",
         "foundry": "Exploit simulation (--exploit flag)",
+        "etherscan": "Contract source fetching (--address flag)",
     }
 
     for name, available in tools.items():
@@ -356,6 +474,20 @@ def check() -> None:
         table.add_row(name, status, tool_info.get(name, ""))
 
     console.print(table)
+
+    # RPC URLs status
+    rpc_table = Table(title="Fork Mode RPC URLs", show_header=True)
+    rpc_table.add_column("Chain", style="bold")
+    rpc_table.add_column("Status")
+
+    for chain_name in ["ethereum", "polygon", "arbitrum", "optimism", "base"]:
+        url = settings.get_rpc_url(chain_name)
+        if url:
+            rpc_table.add_row(chain_name, "[green]✓ Configured[/green]")
+        else:
+            rpc_table.add_row(chain_name, "[dim]Not set[/dim]")
+
+    console.print(rpc_table)
 
     # Installation hints
     missing = [name for name, available in tools.items() if not available]
@@ -369,6 +501,8 @@ def check() -> None:
             console.print("  llm: Set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable")
         if "foundry" in missing:
             console.print("  foundry: curl -L https://foundry.paradigm.xyz | bash && foundryup")
+        if "etherscan" in missing:
+            console.print("  etherscan: Set ETHERSCAN_API_KEY environment variable")
 
 
 @app.command()

@@ -71,6 +71,11 @@ class ExploitResult(BaseModel):
     error: str | None = Field(default=None, description="Error message if failed")
     profit_wei: int | None = Field(default=None, description="Profit in wei if successful")
 
+    # Retry tracking (added in Step 2)
+    attempts: int = Field(default=1, ge=1, description="Number of generation attempts")
+    retry_errors: list[str] = Field(default_factory=list, description="Errors from failed attempts")
+    generation_method: str = Field(default="template", description="'llm', 'template', or 'none'")
+
     @computed_field
     @property
     def exploitable(self) -> bool:
@@ -204,7 +209,7 @@ class AuditReport(BaseModel):
     contract_hash: str
     contract_name: str | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    version: str = "0.1.0"
+    version: str = "0.4.0"
     
     # Results from each verifier
     compilation: VerificationResult | None = None

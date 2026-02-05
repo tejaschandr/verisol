@@ -16,16 +16,16 @@ AI-powered smart contract security verification with **exploit simulation**.
 
 Other tools say: *"Potential reentrancy at line 15"*
 
-VeriSol says: *"Reentrancy at line 15 - **EXPLOITABLE** - drained 11 ETH"*
+VeriSol says: *"Reentrancy at line 15 - **EXPLOITABLE** - drained 11 ETH in 1 attempt via LLM"*
 
 ```bash
 $ verisol audit EtherStore.sol --quick --exploit
 
 Exploit Results: 1/1 EXPLOITABLE
-  EXPLOITABLE Reentrancy Eth (profit: 11000000000000000000 wei)
+  EXPLOITABLE Reentrancy Eth (profit: 11000000000000000000 wei, 1 attempt via llm)
 ```
 
-VeriSol automatically generates and runs Foundry exploit tests to prove vulnerabilities are real.
+VeriSol uses an **LLM agent with a retry loop** to generate Foundry exploit PoCs. When a generated exploit fails, the agent reads the compiler/runtime error and fixes it — similar to how [ReX](https://arxiv.org/abs/2504.01860) achieves 92% success rates with iterative refinement.
 
 ## Installation
 
@@ -87,8 +87,34 @@ This will:
 3. Execute exploits on a local EVM
 4. Report which vulnerabilities are **proven exploitable**
 
-Currently supported exploit types:
-- Reentrancy (ETH drain attacks)
+### Fork Mode (Deployed Contracts)
+
+Audit any verified contract on-chain by address:
+
+```bash
+verisol audit --address 0x... --chain ethereum --quick
+verisol audit --address 0x... --chain ethereum --exploit
+verisol audit --address 0x... --chain ethereum --exploit --block 19000000
+```
+
+Supported chains: Ethereum, Polygon, Arbitrum, Optimism, Base.
+Requires `ETHERSCAN_API_KEY` and `{CHAIN}_RPC_URL` in `.env`.
+
+### Vulnerability Coverage
+
+The LLM agent generalizes across vulnerability types — no templates required:
+
+- Reentrancy (classic + read-only)
+- Access control / visibility
+- Delegatecall / storage collision
+- DoS (King of Ether pattern)
+- Weak randomness
+- Precision loss / divide-before-multiply
+- Oracle staleness
+- Unprotected callbacks (ERC-721)
+- Ecrecover signature issues
+- Flash loan attacks
+- And more — the LLM generates exploits from first principles
 
 ## GitHub Action
 
@@ -109,9 +135,11 @@ See [docs/github-action.md](docs/github-action.md) for full documentation.
 ```
 Contract → Solc → [Slither | SMTChecker | LLM] → Confidence Scoring → Report
                                                          ↓
-                                              [Exploit Simulation]
-                                                         ↓
-                                              Foundry → EXPLOITABLE / NOT EXPLOITABLE
+                                              [LLM Exploit Agent]
+                                                    ↓         ↑
+                                              forge test → error feedback
+                                                    ↓
+                                              EXPLOITABLE / NOT EXPLOITABLE
 ```
 
 1. **Solc** - Compilation check (gate)
@@ -119,26 +147,63 @@ Contract → Solc → [Slither | SMTChecker | LLM] → Confidence Scoring → Re
 3. **SMTChecker** - Formal verification (requires z3)
 4. **LLM** - Semantic analysis (GPT-4o/Claude)
 5. **Confidence Scoring** - Cross-tool consensus
-6. **Exploit Simulation** - Generate & run Foundry PoCs (with `--exploit`)
+6. **LLM Exploit Agent** - Generate Foundry PoC → run → read errors → retry (with `--exploit`)
 
 ## Benchmark Results
 
+Tested on 32 vulnerable contracts (8 mainnet-style + 24 [DeFiVulnLabs](https://github.com/SunWeb3Sec/DeFiVulnLabs)) with GPT-4o and 3 retries per finding.
+
+### Exploit Generation
+
 | Metric | Value |
 |--------|-------|
-| Detection Rate | 100% (8/8 vulnerable contracts) |
-| Precision | 80% (2 false positives) |
-| F1 Score | 88.9% |
+| **Exploitable** | **13/32 (40.6%)** |
+| Adjusted (excl. detection gaps) | 13/26 (50.0%) |
+| Avg attempts (successes) | 1.23 |
+| Contracts exploited without templates | **10** |
+| Retry loop saves | 3 contracts needed 2-3 attempts |
 
-Vulnerability types detected: reentrancy, delegatecall, tx.origin, DoS, access control, integer overflow, unchecked return, price oracle manipulation.
+### Per-Contract Results
+
+| Contract | Vuln Type | Result | Method | Attempts |
+|----------|-----------|--------|--------|----------|
+| EtherStore | reentrancy | EXPLOITABLE | llm | 1 |
+| MissingAccessControl | access-control | EXPLOITABLE | llm | 1 |
+| Proxy | delegatecall | EXPLOITABLE | llm | 2 |
+| VulnerableLending | flash-loan | EXPLOITABLE* | llm | 2 |
+| KingOfEther | dos | EXPLOITABLE | llm | 1 |
+| EtherGame | selfdestruct | EXPLOITABLE | llm | 1 |
+| GuessTheRandomNumber | randomness | EXPLOITABLE | llm | 1 |
+| SimplePool | precision-loss | EXPLOITABLE | llm | 1 |
+| VulnerableOracle | oracle-stale | EXPLOITABLE | llm | 1 |
+| VulnContract | read-only-reentrancy | EXPLOITABLE | llm | 3 |
+| MaxMint721 | callback | EXPLOITABLE | llm | 1 |
+| Miscalculation | divide-before-multiply | EXPLOITABLE | llm | 1 |
+| SimpleBank | ecrecover | EXPLOITABLE | llm | 1 |
+
+*Non-deterministic — succeeded on some runs.
+
+6 contracts had no Slither findings (detection gap, not exploit generation failure). See `benchmarks/results/` for full JSON.
+
+### Detection
+
+| Metric | Value |
+|--------|-------|
+| Detection Rate | 81.3% (26/32 contracts with findings) |
+| Vulnerability types detected | 13+ |
+
+Detection gaps: Slither misses visibility, private-data, bypass-contract, data-location, and some overflow patterns. These are detection-side limitations, not exploit generation failures.
 
 ## Configuration
 
 Create `.env` file:
 
 ```bash
-OPENAI_API_KEY=sk-...          # Required for default/full modes
+OPENAI_API_KEY=sk-...          # Required for default/full modes + exploit generation
 LLM_PROVIDER=openai            # or anthropic
 LLM_MODEL=gpt-4o               # or claude-3-5-sonnet-latest
+EXPLOIT_LLM_ENABLED=true       # Enable LLM exploit generation (default: true)
+EXPLOIT_MAX_RETRIES=3           # Max retry attempts per finding (default: 3)
 ```
 
 ## CLI Commands
@@ -159,17 +224,21 @@ verisol --version                 # Show version
 verisol/
 ├── src/verisol/           # Main package
 │   ├── cli.py             # CLI (verisol command)
-│   ├── api.py             # FastAPI server
 │   ├── pipeline.py        # Verification orchestrator
 │   ├── verifiers/         # Slither, SMTChecker, LLM
+│   ├── integrations/      # External services (Etherscan)
 │   └── exploits/          # Exploit simulation
-│       ├── generator.py   # Finding → Foundry test
-│       ├── runner.py      # Execute forge tests
-│       └── templates/     # Exploit templates (reentrancy, etc.)
+│       ├── agent.py       # LLM retry loop (generate → test → fix → retry)
+│       ├── llm_generator.py  # LLM exploit code generation
+│       ├── prompts.py     # Exploit generation prompts
+│       ├── generator.py   # Template fallback (Jinja2)
+│       ├── runner.py      # Execute forge tests (local + fork)
+│       └── templates/     # Exploit templates (fallback)
+├── benchmarks/            # Benchmark suite (32 contracts)
 ├── .github/workflows/     # CI workflows
 ├── action.yml             # GitHub Action
 ├── docs/                  # Documentation
-└── tests/                 # Test suite
+└── tests/                 # Test suite (77 tests)
 ```
 
 ## License
