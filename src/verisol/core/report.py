@@ -209,7 +209,7 @@ class AuditReport(BaseModel):
     contract_hash: str
     contract_name: str | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    version: str = "0.4.0"
+    version: str = Field(default_factory=lambda: __import__("verisol").__version__)
     
     # Results from each verifier
     compilation: VerificationResult | None = None

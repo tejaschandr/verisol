@@ -9,7 +9,6 @@ import pytest
 from verisol.exploits.runner import (
     run_exploit,
     _write_multi_file_sources,
-    _write_remappings,
     _find_main_contract_file,
 )
 
@@ -37,7 +36,7 @@ class TestForkUrlInCommand:
     """Verify --fork-url and --fork-block-number appear in the forge command."""
 
     @patch("verisol.exploits.runner.check_foundry_available", return_value=True)
-    @patch("verisol.exploits.runner._create_foundry_project")
+    @patch("verisol.exploits.runner._setup_hot_start_project")
     @patch("verisol.exploits.runner.subprocess.run")
     @patch("verisol.exploits.runner.shutil.rmtree")
     def test_fork_url_added_to_command(self, _rmtree, mock_run, _create, _check, tmp_path):
@@ -63,7 +62,7 @@ class TestForkUrlInCommand:
         assert "--fork-block-number" not in cmd
 
     @patch("verisol.exploits.runner.check_foundry_available", return_value=True)
-    @patch("verisol.exploits.runner._create_foundry_project")
+    @patch("verisol.exploits.runner._setup_hot_start_project")
     @patch("verisol.exploits.runner.subprocess.run")
     @patch("verisol.exploits.runner.shutil.rmtree")
     def test_fork_block_added_to_command(self, _rmtree, mock_run, _create, _check, tmp_path):
@@ -90,7 +89,7 @@ class TestForkUrlInCommand:
         assert "18000000" in cmd
 
     @patch("verisol.exploits.runner.check_foundry_available", return_value=True)
-    @patch("verisol.exploits.runner._create_foundry_project")
+    @patch("verisol.exploits.runner._setup_hot_start_project")
     @patch("verisol.exploits.runner.subprocess.run")
     @patch("verisol.exploits.runner.shutil.rmtree")
     def test_no_fork_params_without_url(self, _rmtree, mock_run, _create, _check, tmp_path):
@@ -118,7 +117,7 @@ class TestForkTimeout:
     """Verify fork mode uses the longer timeout."""
 
     @patch("verisol.exploits.runner.check_foundry_available", return_value=True)
-    @patch("verisol.exploits.runner._create_foundry_project")
+    @patch("verisol.exploits.runner._setup_hot_start_project")
     @patch("verisol.exploits.runner.subprocess.run")
     @patch("verisol.exploits.runner.shutil.rmtree")
     def test_fork_mode_uses_settings_timeout(self, _rmtree, mock_run, _create, _check, tmp_path):
@@ -144,7 +143,7 @@ class TestForkTimeout:
         assert mock_run.call_args[1]["timeout"] == 300
 
     @patch("verisol.exploits.runner.check_foundry_available", return_value=True)
-    @patch("verisol.exploits.runner._create_foundry_project")
+    @patch("verisol.exploits.runner._setup_hot_start_project")
     @patch("verisol.exploits.runner.subprocess.run")
     @patch("verisol.exploits.runner.shutil.rmtree")
     def test_non_fork_uses_default_timeout(self, _rmtree, mock_run, _create, _check, tmp_path):
@@ -163,7 +162,7 @@ class TestForkTimeout:
                 "EtherStore",
             )
 
-        assert mock_run.call_args[1]["timeout"] == 120
+        assert mock_run.call_args[1]["timeout"] == 30
 
 
 # ---------------------------------------------------------------------------
@@ -191,40 +190,6 @@ class TestWriteMultiFileSources:
         dest = tmp_path / "@openzeppelin" / "contracts" / "token" / "ERC20" / "ERC20.sol"
         assert dest.exists()
         assert "contract ERC20" in dest.read_text()
-
-
-class TestWriteRemappings:
-    def test_creates_remappings_for_at_prefixed_paths(self, tmp_path):
-        source_files = {
-            "contracts/Token.sol": "...",
-            "@openzeppelin/contracts/ERC20.sol": "...",
-            "@chainlink/contracts/VRFConsumer.sol": "...",
-        }
-        _write_remappings(tmp_path, source_files)
-
-        content = (tmp_path / "remappings.txt").read_text()
-        assert "@openzeppelin/=src/@openzeppelin/" in content
-        assert "@chainlink/=src/@chainlink/" in content
-
-    def test_no_remappings_for_plain_paths(self, tmp_path):
-        source_files = {
-            "contracts/Token.sol": "...",
-            "contracts/Utils.sol": "...",
-        }
-        _write_remappings(tmp_path, source_files)
-
-        assert not (tmp_path / "remappings.txt").exists()
-
-    def test_preserves_existing_remappings(self, tmp_path):
-        (tmp_path / "remappings.txt").write_text("forge-std/=lib/forge-std/src/\n")
-        source_files = {
-            "@openzeppelin/contracts/ERC20.sol": "...",
-        }
-        _write_remappings(tmp_path, source_files)
-
-        content = (tmp_path / "remappings.txt").read_text()
-        assert "forge-std/=lib/forge-std/src/" in content
-        assert "@openzeppelin/=src/@openzeppelin/" in content
 
 
 class TestFindMainContractFile:
